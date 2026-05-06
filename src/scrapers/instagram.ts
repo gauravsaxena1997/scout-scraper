@@ -9,11 +9,16 @@ const SCRIPT = path.join(process.cwd(), "packages/scout/src/python/instagram.py"
 
 function getVenvPython(): string {
   if (process.env.SCOUT_VENV_PYTHON) return process.env.SCOUT_VENV_PYTHON;
-  const candidates = [
-    path.join(process.cwd(), "src", "lib", "scout", ".venv", "bin", "python3"),
-    path.join(process.cwd(), "packages/scout/.venv", "bin", "python3"),
-  ];
-  return candidates.find((c) => fs.existsSync(c)) ?? "python3";
+  const venvRoot = process.env.SCOUT_VENV_ROOT;
+  if (venvRoot) {
+    const candidates = [
+      path.join(venvRoot, "bin", "python3"),
+      path.join(venvRoot, "bin", "python"),
+    ];
+    const found = candidates.find((c) => fs.existsSync(c));
+    if (found) return found;
+  }
+  return "python3";
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Python script output is a runtime JSON blob; shape unknown at compile time

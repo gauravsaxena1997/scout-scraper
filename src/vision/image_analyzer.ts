@@ -8,14 +8,15 @@ import { TEMP_DIR } from "./downloader";
 
 function getVenvPython(): string {
   if (process.env.SCOUT_VENV_PYTHON) return process.env.SCOUT_VENV_PYTHON;
-  const candidates = [
-    path.join(process.cwd(), "packages", "scout", ".venv", "bin", "python3"),
-    path.join(process.cwd(), "packages", "scout", ".venv", "bin", "python"),
-    path.resolve(__dirname, "..", "..", "..", ".venv", "bin", "python3"),
-    path.resolve(__dirname, "..", "..", "..", ".venv", "bin", "python"),
-  ];
-  for (const c of candidates) {
-    if (fs.existsSync(c)) return c;
+  const venvRoot = process.env.SCOUT_VENV_ROOT;
+  if (venvRoot) {
+    const candidates = [
+      path.join(venvRoot, "bin", "python3"),
+      path.join(venvRoot, "bin", "python"),
+    ];
+    for (const c of candidates) {
+      if (fs.existsSync(c)) return c;
+    }
   }
   return "python3";
 }

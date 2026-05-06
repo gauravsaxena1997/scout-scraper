@@ -11,15 +11,17 @@ export interface TranscriptResult {
 function getVenvPython(): string {
   if (process.env.SCOUT_VENV_PYTHON) return process.env.SCOUT_VENV_PYTHON;
 
-  // __dirname is unreliable under bundlers (Next.js, etc); try cwd-relative first
-  const candidates = [
-    path.join(process.cwd(), "packages", "scout", ".venv", "bin", "python3"),
-    path.join(process.cwd(), "packages", "scout", ".venv", "bin", "python"),
-    path.resolve(__dirname, "..", "..", "..", ".venv", "bin", "python3"),
-    path.resolve(__dirname, "..", "..", "..", ".venv", "bin", "python"),
-  ];
-  for (const c of candidates) {
-    if (fs.existsSync(c)) return c;
+  // SCOUT_VENV_ROOT lets users point to their venv without static .venv literals here
+  // (static .venv paths trigger Turbopack DirAssetReference which follows broken symlinks)
+  const venvRoot = process.env.SCOUT_VENV_ROOT;
+  if (venvRoot) {
+    const candidates = [
+      path.join(venvRoot, "bin", "python3"),
+      path.join(venvRoot, "bin", "python"),
+    ];
+    for (const c of candidates) {
+      if (fs.existsSync(c)) return c;
+    }
   }
   return "python3";
 }

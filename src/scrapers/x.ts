@@ -1,11 +1,15 @@
 import { spawnSync } from "child_process";
 import path from "path";
-import { fileURLToPath } from "url";
 import { urlToId } from "../store/db";
 import type { RawItem, ProfileSnapshot } from "../schema";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const BIRD_MJS = path.join(__dirname, "../vendor/bird-search/bird-search.mjs");
+// Use process.cwd() (always the Pathrix project root) so the path survives
+// Next.js bundling — import.meta.url gets rewritten to the chunk URL by webpack,
+// making __dirname point into .next/server/chunks/ where vendor files don't exist.
+const BIRD_MJS = path.join(
+  process.cwd(),
+  "packages/scout/src/vendor/bird-search/bird-search.mjs",
+);
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- bird-search MJS output is a runtime JSON blob; tweet shape unknown at compile time
 function birdSearch(query: string, count: number): any[] {
