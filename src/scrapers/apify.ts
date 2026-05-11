@@ -38,8 +38,8 @@ export const apifyPool = new ApifyTokenPool(process.env.APIFY_TOKENS ?? "");
 // ─── Actor Registry ───────────────────────────────────────────────────────────
 
 export const APIFY_ACTOR_REGISTRY = {
-  // Upwork
-  "upwork-jobs":            "neatrat/upwork-job-scraper",
+  // Upwork (flash_mage; pay-per-event $0.001 start + $0.003/result, no caps)
+  "upwork-jobs":            "flash_mage/upwork",
   // LinkedIn
   "linkedin-jobs":          "curious_coder/linkedin-jobs-scraper",
   "linkedin-profiles":      "harvestapi/linkedin-profile-scraper",

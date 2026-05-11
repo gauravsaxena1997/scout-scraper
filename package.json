@@ -3,28 +3,42 @@
   "version": "1.0.0",
   "description": "Zero-cost, self-hosted intelligence layer for Claude. Scrapes Reddit, HN, GitHub, and 16+ RSS feeds, fuses results with RRF ranking, and exposes everything as MCP tools.",
   "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "bin": {
     "pathrix-scout": "./dist/bin/cli.js"
   },
   "exports": {
     ".": {
-      "types": "./src/index.ts",
-      "import": "./src/index.ts"
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
-    "dev": "tsc -p tsconfig.build.json --watch"
+    "build": "tsup",
+    "dev": "tsup --watch"
   },
   "peerDependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
-    "zod": "^3.0.0 || ^4.0.0",
-    "better-sqlite3": "^9.0.0"
+    "better-sqlite3": "^9.0.0",
+    "zod": "^3.0.0 || ^4.0.0"
   },
   "devDependencies": {
+    "tsup": "^8.5.1",
     "typescript": "^5.0.0"
   },
-  "keywords": ["mcp", "claude", "ai", "scout", "rss", "reddit", "hackernews", "github"],
+  "keywords": [
+    "mcp",
+    "claude",
+    "ai",
+    "scout",
+    "rss",
+    "reddit",
+    "hackernews",
+    "github"
+  ],
   "license": "MIT",
   "repository": {
     "type": "git",

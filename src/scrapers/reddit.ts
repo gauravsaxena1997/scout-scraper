@@ -1,5 +1,5 @@
 import { SCOUT_UA, FETCH_TIMEOUT_MS, DEFAULT_SUBREDDITS } from "../config";
-import { urlToId, isThreadResolved } from "../store/db";
+import { urlToId, isThreadResolved, getThreadCloseState, reopenThread } from "../store/db";
 import type { RawItem, ProfileSnapshot, OpenThread, CommentSample } from "../schema";
 import { scoreItem } from "../intelligence/score";
 
@@ -74,14 +74,27 @@ export async function getHotPosts(subreddit: string, limit = 10): Promise<RawIte
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Reddit API comment objects are external; shape unknown at compile time
+function findCommentInTree(children: any[], targetId: string): any | null {
+  for (const child of children) {
+    if (child?.kind !== "t1" || !child.data) continue;
+    if (child.data.id === targetId) return child;
+    const replies = child.data.replies;
+    if (replies && typeof replies === "object") {
+      const found = findCommentInTree(replies.data?.children ?? [], targetId);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Reddit API comment objects are external; shape unknown at compile time
 async function fetchOpenThreads(handle: string, recentComments: any[]): Promise<OpenThread[]> {
-  const cutoff = Date.now() - 14 * 86_400_000;
-  const candidates = recentComments
-    .filter((c) => {
-      const ts = c?.data?.created_utc;
-      return ts && ts * 1000 > cutoff;
-    })
-    .slice(0, 5);
+  // 90-day window - covers all realistic engagement timeframes
+  const cutoff = Date.now() - 90 * 86_400_000;
+  const candidates = recentComments.filter((c) => {
+    const ts = c?.data?.created_utc;
+    return ts && ts * 1000 > cutoff;
+  });
 
   const threads: OpenThread[] = [];
   for (const c of candidates) {
@@ -91,14 +104,33 @@ async function fetchOpenThreads(handle: string, recentComments: any[]): Promise<
     const commentId = d.id ?? "";
     const subreddit = d.subreddit ?? "";
     if (!postId || !commentId || !subreddit) continue;
-    if (isThreadResolved("reddit", `t1_${commentId}`)) continue;
+
+    // Check resolution state. If resolved but a new reply arrived after close, reopen.
+    const fullId = `t1_${commentId}`;
+    if (isThreadResolved("reddit", fullId)) {
+      const closeState = getThreadCloseState("reddit", fullId);
+      const latestReplyAt = d.replies?.data?.children?.[0]?.data?.created_utc;
+      const latestReplyTs = latestReplyAt ? new Date(latestReplyAt * 1000).toISOString() : null;
+      const hasNewReply =
+        latestReplyTs &&
+        closeState?.lastReplyAt &&
+        latestReplyTs > closeState.lastReplyAt;
+      if (!hasNewReply) continue;
+      // New reply after close - reopen the thread
+      reopenThread("reddit", fullId);
+    }
 
     try {
       await new Promise((r) => setTimeout(r, 300));
-      const url = `${BASE}/r/${subreddit}/comments/${postId}/_/${commentId}.json?limit=10&depth=2`;
+      const url = `${BASE}/r/${subreddit}/comments/${postId}/_/${commentId}.json?limit=50&depth=5`;
       const data = await redditFetch(url);
+      // Walk the tree to find our specific comment - do NOT assume it's children[0].
+      // When your comment is a reply to someone else, children[0] is the parent and
+      // your comment is nested inside. Grabbing children[0].replies gives siblings, not replies to you.
+      const topLevel: any[] = data?.[1]?.data?.children ?? [];
+      const ourComment = findCommentInTree(topLevel, commentId);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Reddit thread JSON nests deeply; reply child shape is external API response
-      const replies: any[] = data?.[1]?.data?.children?.[0]?.data?.replies?.data?.children ?? [];
+      const replies: any[] = ourComment?.data?.replies?.data?.children ?? [];
       const otherReplies = replies.filter(
         (r) => r?.data?.author && r.data.author !== handle && r.kind !== "more"
       );
@@ -204,7 +236,7 @@ export async function scrapeOwnProfile(handle: string): Promise<ProfileSnapshot>
   const [about, submitted, comments] = await Promise.all([
     redditFetch(`${BASE}/user/${encodeURIComponent(handle)}/about.json`),
     redditFetch(`${BASE}/user/${encodeURIComponent(handle)}/submitted.json?limit=15&sort=new`),
-    redditFetch(`${BASE}/user/${encodeURIComponent(handle)}/comments.json?limit=10&sort=new`).catch(() => null),
+    redditFetch(`${BASE}/user/${encodeURIComponent(handle)}/comments.json?limit=100&sort=new`).catch(() => null),
   ]);
 
   const d = about?.data ?? {};

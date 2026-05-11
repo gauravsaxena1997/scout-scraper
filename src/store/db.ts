@@ -64,6 +64,8 @@ function openDb() {
       platform TEXT NOT NULL,
       comment_id TEXT NOT NULL,
       resolved_at TEXT NOT NULL DEFAULT (datetime('now')),
+      last_reply_at TEXT,
+      close_reason TEXT,
       PRIMARY KEY (platform, comment_id)
     );
 
@@ -87,6 +89,15 @@ function openDb() {
   const cols = db.pragma("table_info(profile_snapshots)") as Array<{ name: string }>;
   if (!cols.some((c) => c.name === "data_json")) {
     db.exec(`ALTER TABLE profile_snapshots ADD COLUMN data_json TEXT`);
+  }
+
+  // Migration: add last_reply_at + close_reason to resolved_threads
+  const threadCols = db.pragma("table_info(resolved_threads)") as Array<{ name: string }>;
+  if (!threadCols.some((c) => c.name === "last_reply_at")) {
+    db.exec(`ALTER TABLE resolved_threads ADD COLUMN last_reply_at TEXT`);
+  }
+  if (!threadCols.some((c) => c.name === "close_reason")) {
+    db.exec(`ALTER TABLE resolved_threads ADD COLUMN close_reason TEXT`);
   }
 
   return db;
@@ -203,10 +214,18 @@ export function getLatestProfileSnapshot(platform: string): ProfileSnapshot | nu
   };
 }
 
-export function resolveThread(platform: string, commentId: string): void {
+export type CloseReason = "REPLIED" | "UPVOTED" | "NOT_NEEDED";
+
+export function resolveThread(
+  platform: string,
+  commentId: string,
+  opts?: { lastReplyAt?: string; closeReason?: CloseReason },
+): void {
   const db = getDb();
-  db.prepare(`INSERT OR REPLACE INTO resolved_threads (platform, comment_id) VALUES (?, ?)`)
-    .run(platform, commentId);
+  db.prepare(
+    `INSERT OR REPLACE INTO resolved_threads (platform, comment_id, last_reply_at, close_reason)
+     VALUES (?, ?, ?, ?)`
+  ).run(platform, commentId, opts?.lastReplyAt ?? null, opts?.closeReason ?? null);
 }
 
 export function isThreadResolved(platform: string, commentId: string): boolean {
@@ -214,6 +233,25 @@ export function isThreadResolved(platform: string, commentId: string): boolean {
   const row = db.prepare(`SELECT 1 FROM resolved_threads WHERE platform=? AND comment_id=?`)
     .get(platform, commentId);
   return !!row;
+}
+
+/** Returns the stored close state for a resolved thread, or null if not resolved. */
+export function getThreadCloseState(
+  platform: string,
+  commentId: string,
+): { lastReplyAt: string | null; closeReason: CloseReason | null } | null {
+  const db = getDb();
+  const row = db.prepare(
+    `SELECT last_reply_at, close_reason FROM resolved_threads WHERE platform=? AND comment_id=?`
+  ).get(platform, commentId) as { last_reply_at: string | null; close_reason: string | null } | undefined;
+  if (!row) return null;
+  return { lastReplyAt: row.last_reply_at, closeReason: row.close_reason as CloseReason | null };
+}
+
+/** Remove a resolved thread so it surfaces again on the next scan. */
+export function reopenThread(platform: string, commentId: string): void {
+  const db = getDb();
+  db.prepare(`DELETE FROM resolved_threads WHERE platform=? AND comment_id=?`).run(platform, commentId);
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SQLite raw row object shape varies at runtime; columns accessed by name

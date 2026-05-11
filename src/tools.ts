@@ -11,19 +11,60 @@ import { SOURCE_QUALITY, OWN_HANDLES, WEB_SEARCH } from "./config";
 import { saveRun, saveItems, searchItems, saveProfileSnapshot, getLatestProfileSnapshot, resolveThread, getRecentItems, urlToId } from "./store/db";
 
 // ─── Lazy scraper imports ─────────────────────────────────────────────────────
+// Standard scrapers (no native binary deps): statically bundled by Turbopack.
+import * as _reddit     from "./scrapers/reddit";
+import * as _hn         from "./scrapers/hn";
+import * as _github     from "./scrapers/github";
+import * as _rss        from "./scrapers/rss";
+import * as _youtube    from "./scrapers/youtube";
+import * as _apify      from "./scrapers/apify";
+import * as _web        from "./scrapers/web";
 
-async function getReddit()     { return import("./scrapers/reddit"); }
-async function getHn()         { return import("./scrapers/hn"); }
-async function getGithub()     { return import("./scrapers/github"); }
-async function getRss()        { return import("./scrapers/rss"); }
-async function getYoutube()    { return import("./scrapers/youtube"); }
-// webpackIgnore: these scrapers use spawnSync with dynamic paths (bird-search, patchright) - Turbopack must not bundle them
-async function getX()          { return import(/* webpackIgnore: true */ "./scrapers/x"); }
-// Instagram: routed through Apify (HTTP-only, no Python/spawnSync). Search still uses the legacy Python scraper.
-async function getInstagramSearch() { return import(/* webpackIgnore: true */ "./scrapers/instagram"); }
-async function getApifyScraper()    { return import("./scrapers/apify"); }
-async function getPolymarket() { return import(/* webpackIgnore: true */ "./scrapers/polymarket"); }
-async function getWeb()       { return import("./scrapers/web"); }
+async function getReddit()       { return _reddit; }
+async function getHn()           { return _hn; }
+async function getGithub()       { return _github; }
+async function getRss()          { return _rss; }
+async function getYoutube()      { return _youtube; }
+async function getApifyScraper() { return _apify; }
+async function getWeb()          { return _web; }
+
+// X, Instagram, Polymarket use spawnSync with paths to external binaries
+// (bird-search.mjs, Python scripts). Turbopack's static analysis sees the
+// path string and tries to resolve it as a module — causing build failures.
+// Dynamic import with webpackIgnore prevents that analysis.
+// If the import fails at runtime (e.g. Turbopack chunk path mismatch in prod),
+// we fall back to stub modules so the scraper returns empty instead of crashing.
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- fallback stubs need loose typing
+type AnyModule = Record<string, (...args: any[]) => any>;
+
+async function safeImport(path: string, stubs: AnyModule): Promise<AnyModule> {
+  try {
+    return await import(/* webpackIgnore: true */ path) as AnyModule;
+  } catch {
+    return stubs;
+  }
+}
+
+async function getX() {
+  return safeImport("./scrapers/x", {
+    searchX:     async () => [],
+    scrapeXUser: async () => null,
+  });
+}
+async function getInstagramSearch() {
+  return safeImport("./scrapers/instagram", {
+    searchInstagram:   async () => [],
+    scrapeInstagram:   async () => null,
+    getInstagramPosts: async () => [],
+  });
+}
+async function getPolymarket() {
+  return safeImport("./scrapers/polymarket", {
+    searchPolymarket:    async () => [],
+    getTrendingPolymarket: async () => [],
+  });
+}
 
 // ─── Tool: search_topic ───────────────────────────────────────────────────────
 
