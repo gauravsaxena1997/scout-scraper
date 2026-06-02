@@ -1,48 +1,36 @@
 /**
- * Apify-based job scrapers for the Outbound Lead Sweep.
- * Moved from src/lib/recon/collectors/apify-jobs.ts.
+ * Generic Apify-backed job listing collectors.
  *
- * INTEGRITY GUARANTEE (v2, 2026-05-05):
- * Every Apify run we kick off MUST end in one of two terminal states:
- *   1. SUCCEEDED - raw dataset items persisted to disk + normalized + returned
- *   2. NOT-SUCCEEDED - ApifyIncompleteRunError thrown WITH the run.id
+ * Every actor run must end in one of two terminal outcomes:
+ *   1. SUCCEEDED - raw dataset items are persisted and normalized.
+ *   2. NOT-SUCCEEDED - ApifyIncompleteRunError is thrown with run metadata.
  *
- * No silent empty returns. No paying for data we can't recover.
- *
- * Disk layout:
- *   logs/recon/apify-runs/<runId>.meta.json   - input + sweep + timestamps (written BEFORE polling)
- *   logs/recon/apify-runs/<runId>.items.json  - raw dataset items (written BEFORE normalization)
- *
- * Recovery: if the function throws ApifyIncompleteRunError, the runId can be
- * passed to recoverApifyRun() to fetch dataset items later.
+ * Scout returns generic job listings. Host applications decide how those
+ * listings map into their own product schemas.
  */
 import fs from "fs";
 import path from "path";
+import { createHash } from "crypto";
 import { ApifyClient } from "apify-client";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-// Job item shape - structural subtype of Pathrix's RawItem. All fields that
-// Pathrix's rawItemSchema requires are present with compatible types so
-// JobItem is directly assignable to RawItem without casting.
-export type JobItem = {
-  source: "OUTBOUND_LEAD";
-  sourceItemId: string;
+export type JobListing = {
+  id: string;
   url: string;
   title: string;
-  body: string;
+  description: string;
   author?: string;
-  channel: string;
-  intent: "apply";
+  platform: ApifyPlatform;
   publishedAt?: string;
-  engagement: { score: number; comments: number };
-  scoutScore: number;
-  media: Array<{ kind: "image" | "link" | "video"; url: string }>;
-  commentSample: never[];
-  rawJson: unknown;
+  metrics: {
+    budget?: number;
+    applicants?: number;
+  };
+  raw: unknown;
 };
 
-// Actor alias -> Apify actor ID mapping for the Outbound Lead Sweep.
+// Actor alias -> Apify actor ID mapping for common job listing actors.
 // Notes on actor selection (verified live 2026-05-08):
 //   - upwork-jobs: neatrat had a 10-runs/100-results lifetime cap on free tier and
 //     silently returns SUCCEEDED with empty arrays after exhaustion. Switched to
@@ -73,6 +61,10 @@ export class ApifyIncompleteRunError extends Error {
   }
 }
 
+function stableUrlId(prefix: string, url: string): string {
+  return `${prefix}:${createHash("sha256").update(url).digest("hex").slice(0, 24)}`;
+}
+
 // ─── Token ───────────────────────────────────────────────────────────────────
 
 function getApifyToken(): string {
@@ -83,7 +75,7 @@ function getApifyToken(): string {
 // ─── Disk audit helpers ──────────────────────────────────────────────────────
 
 function apifyRunsDir(): string {
-  const dir = path.join(process.cwd(), "logs", "recon", "apify-runs");
+  const dir = path.join(process.cwd(), "logs", "apify-runs");
   fs.mkdirSync(dir, { recursive: true });
   return dir;
 }
@@ -118,7 +110,7 @@ function writeRunItems(runId: string, items: unknown[]): void {
 //   - search-result: { id, title, link, data: { id, title, description, jobTile: { job: {...} } } }
 //   - detail:        { id, title, link, data: { opening: {...}, job: {...}, contractTerms: {...} } }
 // We handle both, preferring detail fields when present.
-function normalizeUpwork(item: unknown, query: string): JobItem | null {
+function normalizeUpwork(item: unknown, query: string): JobListing | null {
   const i = item as Record<string, unknown>;
   const url = (i.link ?? i.url ?? i.jobUrl ?? "") as string;
   if (!url) return null;
@@ -135,9 +127,7 @@ function normalizeUpwork(item: unknown, query: string): JobItem | null {
   const tileJob = (jobTile.job ?? {}) as Record<string, unknown>;
   const tileFixed = (tileJob.fixedPriceAmount ?? {}) as Record<string, unknown>;
 
-  const sourceItemId = String(
-    i.id ?? data.id ?? detailJob.ciphertext ?? tileJob.id ?? Buffer.from(url).toString("base64url").slice(0, 32),
-  );
+  const id = stableUrlId("upwork", url);
   const description = String(opening.description ?? data.description ?? "").slice(0, 2000);
   const title = String(i.title ?? data.title ?? query);
   const buyerCompany = (buyer.company as Record<string, unknown> | undefined)?.name as string | undefined;
@@ -152,85 +142,69 @@ function normalizeUpwork(item: unknown, query: string): JobItem | null {
   const totalApplicants = Number(detailJob.totalApplicants ?? 0);
 
   return {
-    source: "OUTBOUND_LEAD",
-    sourceItemId,
+    id,
     url,
     title,
-    body: description,
+    description,
     author: buyerCompany,
-    channel: "upwork",
-    intent: "apply",
+    platform: "upwork",
     publishedAt: (opening.postedOn ?? tileJob.publishTime ?? tileJob.createTime) as string | undefined,
-    engagement: {
-      score,
-      comments: totalApplicants,
+    metrics: {
+      budget: score,
+      applicants: totalApplicants,
     },
-    scoutScore: 0,
-    media: [],
-    commentSample: [],
-    rawJson: item,
+    raw: item,
   };
 }
 
-function normalizeLinkedin(item: unknown, query: string): JobItem | null {
+function normalizeLinkedin(item: unknown, query: string): JobListing | null {
   const i = item as Record<string, unknown>;
   const url = (i.url ?? i.jobUrl ?? i.link ?? i.applyUrl ?? "") as string;
   if (!url) return null;
-  const id = (i.id ?? i.jobId ?? Buffer.from(url).toString("base64url").slice(0, 32)) as string;
+  const id = (i.id ?? i.jobId ?? stableUrlId("linkedin-job", url)) as string;
   const companySlug = i.companyUrl
     ? String(i.companyUrl).match(/\/company\/([^/?#]+)/)?.[1] ?? undefined
     : (i.companySlug as string | undefined);
   const posterPublicIdentifier = (i.posterPublicIdentifier ?? i.recruiterPublicIdentifier) as string | undefined;
   return {
-    source: "OUTBOUND_LEAD",
-    sourceItemId: id,
+    id,
     url,
     title: ((i.title ?? i.jobTitle ?? query) as string),
-    body: ((i.description ?? i.jobDescription ?? i.descriptionHtml ?? "") as string).replace(/<[^>]+>/g, "").slice(0, 2000),
+    description: ((i.description ?? i.jobDescription ?? i.descriptionHtml ?? "") as string).replace(/<[^>]+>/g, "").slice(0, 2000),
     author: ((i.company ?? i.companyName ?? i.organization) as string | undefined),
-    channel: "linkedin",
-    intent: "apply",
+    platform: "linkedin",
     publishedAt: (i.postedAt ?? i.postedDate ?? i.date) as string | undefined,
-    engagement: {
-      score: 0,
-      comments: (i.applicants ?? i.applies ?? 0) as number,
+    metrics: {
+      applicants: (i.applicants ?? i.applies ?? 0) as number,
     },
-    scoutScore: 0,
-    media: [],
-    commentSample: [],
-    rawJson: { ...i, companySlug, posterPublicIdentifier },
+    raw: { ...i, companySlug, posterPublicIdentifier },
   };
 }
 
-function normalizePeoplePerHour(item: unknown, query: string): JobItem | null {
+function normalizePeoplePerHour(item: unknown, query: string): JobListing | null {
   const i = item as Record<string, unknown>;
   const url = (i.url ?? i.jobUrl ?? i.link ?? "") as string;
   if (!url) return null;
-  const id = (i.id ?? i.jobId ?? Buffer.from(url).toString("base64url").slice(0, 32)) as string;
+  const id = (i.id ?? i.jobId ?? stableUrlId("peopleperhour-job", url)) as string;
   return {
-    source: "OUTBOUND_LEAD",
-    sourceItemId: id,
+    id,
     url,
     title: ((i.title ?? i.jobTitle ?? query) as string),
-    body: ((i.description ?? i.snippet ?? "") as string).slice(0, 2000),
+    description: ((i.description ?? i.snippet ?? "") as string).slice(0, 2000),
     author: ((i.buyer ?? i.clientName ?? i.poster) as string | undefined),
-    channel: "peopleperhour",
-    intent: "apply",
+    platform: "peopleperhour",
     publishedAt: (i.postedAt ?? i.date ?? i.createdAt) as string | undefined,
-    engagement: {
-      score: (i.budget ?? i.budgetMin ?? 0) as number,
-      comments: (i.proposalCount ?? i.bids ?? 0) as number,
+    metrics: {
+      budget: (i.budget ?? i.budgetMin ?? 0) as number,
+      applicants: (i.proposalCount ?? i.bids ?? 0) as number,
     },
-    scoutScore: 0,
-    media: [],
-    commentSample: [],
-    rawJson: item,
+    raw: item,
   };
 }
 
 export type ApifyPlatform = "upwork" | "linkedin" | "peopleperhour";
 
-export const APIFY_NORMALIZERS: Record<ApifyPlatform, (item: unknown, query: string) => JobItem | null> = {
+export const JOB_NORMALIZERS: Record<ApifyPlatform, (item: unknown, query: string) => JobListing | null> = {
   upwork: normalizeUpwork,
   linkedin: normalizeLinkedin,
   peopleperhour: normalizePeoplePerHour,
@@ -288,18 +262,12 @@ const ACTOR_INPUT: Record<string, (query: string, limit: number, opts?: ActorInp
 // ─── Public API ──────────────────────────────────────────────────────────────
 
 export interface ApifyJobsCollectorArgs {
-  // Legacy alias path: caller passes the alias (e.g. "upwork-jobs"), scout
-  // resolves to the real Apify actor ID via JOB_ACTOR_MAP. Kept for backward
-  // compatibility with sweeps that haven't been migrated to collectorId.
   actor: string;
-  // SSOT path (Phase 5+): caller passes the real Apify actor ID directly
-  // (e.g. "flash_mage/upwork"), resolved upstream via Collector.apifyActorId.
-  // When provided, takes precedence over `actor` alias resolution.
   apifyActorId?: string;
   platform: ApifyPlatform;
   query: string;
   limit: number;
-  sweepId?: string;
+  runGroupId?: string;
   excludedSkills?: string[];
   maxProposals?: number;
   minBudgetFixed?: number;
@@ -307,13 +275,15 @@ export interface ApifyJobsCollectorArgs {
 }
 
 export interface ApifyJobsCollectorResult {
-  items: JobItem[];
+  items: JobListing[];
   apifyRunId: string;
   datasetId: string;
   status: string;
   itemCountRaw: number;
   startedAt: string;
   finishedAt: string;
+  /** Actual Apify compute cost for this run in USD (from Run.usageTotalUsd). */
+  usageTotalUsd: number;
 }
 
 /**
@@ -323,8 +293,6 @@ export async function collectFromApifyJobs(args: ApifyJobsCollectorArgs): Promis
   const token = getApifyToken();
   if (!token) throw new Error("APIFY_TOKENS not set in .env");
 
-  // Prefer explicit apifyActorId (SSOT path: resolved upstream from Collector
-  // table); fall back to alias lookup via JOB_ACTOR_MAP.
   const actorId = args.apifyActorId ?? JOB_ACTOR_MAP[args.actor];
   if (!actorId) throw new Error(`Unknown actor alias: ${args.actor}`);
 
@@ -347,7 +315,7 @@ export async function collectFromApifyJobs(args: ApifyJobsCollectorArgs): Promis
     platform: args.platform,
     query: args.query,
     limit: args.limit,
-    sweepId: args.sweepId,
+    runGroupId: args.runGroupId,
     input,
     startedAt,
     initialStatus: startedRun.status,
@@ -374,8 +342,8 @@ export async function collectFromApifyJobs(args: ApifyJobsCollectorArgs): Promis
 
   writeRunItems(startedRun.id, rawItems);
 
-  const normalizer = APIFY_NORMALIZERS[args.platform];
-  const normalized: JobItem[] = [];
+  const normalizer = JOB_NORMALIZERS[args.platform];
+  const normalized: JobListing[] = [];
   for (const item of rawItems) {
     try {
       const n = normalizer(item, args.query);
@@ -391,7 +359,7 @@ export async function collectFromApifyJobs(args: ApifyJobsCollectorArgs): Promis
   const FULL_TIME_PATTERN = /full[- ]?time|permanent|salaried|\bfte\b|full time employee/i;
 
   const out = normalized.filter((item) => {
-    const raw = item.rawJson as Record<string, unknown>;
+    const raw = item.raw as Record<string, unknown>;
 
     // Upwork (flash_mage): detail shape exposes raw.data.{job,contractTerms};
     // search-result shape exposes raw.data.jobTile.job.{fixedPriceAmount,jobType}.
@@ -406,7 +374,7 @@ export async function collectFromApifyJobs(args: ApifyJobsCollectorArgs): Promis
     const proposals = Number(
       upworkJob.totalApplicants
       ?? raw.proposalCount ?? raw.proposals ?? raw.bids
-      ?? item.engagement.comments ?? 0,
+      ?? item.metrics.applicants ?? 0,
     );
     if (proposals > maxProposals) return false;
 
@@ -424,7 +392,7 @@ export async function collectFromApifyJobs(args: ApifyJobsCollectorArgs): Promis
 
     if (args.platform === "linkedin") {
       const empType = String(raw.employmentType ?? raw.contractType ?? "").toLowerCase();
-      const titleBody = `${item.title} ${item.body}`.toLowerCase();
+      const titleBody = `${item.title} ${item.description}`.toLowerCase();
       if (FULL_TIME_PATTERN.test(empType) || FULL_TIME_PATTERN.test(titleBody)) return false;
     }
 
@@ -436,6 +404,8 @@ export async function collectFromApifyJobs(args: ApifyJobsCollectorArgs): Promis
     return true;
   });
 
+  const settledRun = await client.run(startedRun.id).get();
+
   return {
     items: out,
     apifyRunId: startedRun.id,
@@ -444,5 +414,6 @@ export async function collectFromApifyJobs(args: ApifyJobsCollectorArgs): Promis
     itemCountRaw: rawItems.length,
     startedAt,
     finishedAt,
+    usageTotalUsd: settledRun?.usageTotalUsd ?? finishedRun.usageTotalUsd ?? 0,
   };
 }

@@ -8,7 +8,7 @@ import http from "http";
 
 export const TEMP_DIR =
   process.env.SCOUT_TEMP_DIR ??
-  path.join(os.homedir(), ".local", "share", "pathrix-scout", "tmp");
+  path.join(os.homedir(), ".local", "share", "scout-scraper", "tmp");
 
 function resolveYtDlp(): string {
   if (process.env.SCOUT_YT_DLP) return process.env.SCOUT_YT_DLP;

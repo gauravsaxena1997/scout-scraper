@@ -1,31 +1,22 @@
 /**
- * Direct-URL RSS fetcher for the Outbound Lead Sweep.
- * Moved from src/lib/recon/collectors/rss-fetch.ts.
+ * Direct-URL RSS/Atom fetcher.
  *
- * Fetches any per-URL RSS/Atom feed (job boards: RemoteOK, WeWorkRemotely, etc.)
- * and returns items shaped as Pathrix-canonical RawItems. Scout's fetchSingleFeed
- * targets Scout's own configured feed list; this function takes any arbitrary URL.
+ * Fetches any per-URL RSS/Atom feed and returns generic feed items. Host
+ * applications decide how to map those items into product-specific schemas.
  */
 import crypto from "crypto";
 
 const FETCH_TIMEOUT_MS = 15_000;
 
-// RSS item shape - structural subtype of Pathrix's RawItem.
-export type RssItem = {
-  source: "OUTBOUND_LEAD";
-  sourceItemId: string;
+export type FeedItem = {
+  id: string;
   url: string;
   title: string;
-  body: string;
+  description: string;
   author: string;
-  channel: string;
-  intent: "apply";
+  sourceName: string;
   publishedAt?: string;
-  engagement: { score: number; comments: number };
-  scoutScore: number;
-  media: never[];
-  commentSample: never[];
-  rawJson: { feedUrl: string | undefined; raw: string };
+  raw: string;
 };
 
 function extractTag(xml: string, tag: string): string {
@@ -51,7 +42,7 @@ function splitItems(xml: string): string[] {
   return parts;
 }
 
-function parseItem(chunk: string, platform: string): RssItem | null {
+function parseItem(chunk: string, sourceName: string): FeedItem | null {
   const url =
     extractTag(chunk, "link") ||
     extractAttr(chunk, "link", "href") ||
@@ -73,7 +64,7 @@ function parseItem(chunk: string, platform: string): RssItem | null {
     extractTag(chunk, "dc:date") ||
     "";
   const author =
-    extractTag(chunk, "dc:creator") || extractTag(chunk, "author") || platform;
+    extractTag(chunk, "dc:creator") || extractTag(chunk, "author") || sourceName;
 
   let publishedAt: string | undefined;
   if (published) {
@@ -86,62 +77,56 @@ function parseItem(chunk: string, platform: string): RssItem | null {
 
   const idHash = crypto.createHash("sha256").update(guid).digest("hex").slice(0, 16);
   return {
-    source: "OUTBOUND_LEAD",
-    sourceItemId: `rss:${platform}:${idHash}`,
+    id: `rss:${sourceName}:${idHash}`,
     url,
     title: title.slice(0, 300),
-    body: body.replace(/<[^>]+>/g, "").slice(0, 1500),
+    description: body.replace(/<[^>]+>/g, "").slice(0, 1500),
     author,
-    channel: platform,
-    intent: "apply",
+    sourceName,
     publishedAt,
-    engagement: { score: 0, comments: 0 },
-    scoutScore: 0,
-    media: [],
-    commentSample: [],
-    rawJson: { feedUrl: undefined, raw: chunk.slice(0, 2000) },
+    raw: chunk.slice(0, 2000),
   };
 }
 
 export interface FetchRssResult {
   url: string;
-  platform: string;
+  sourceName: string;
   itemCountRaw: number;
-  items: RssItem[];
+  items: FeedItem[];
   fetchedAt: string;
   error?: string;
 }
 
 export async function fetchRssFeed(args: {
   url: string;
-  platform: string;
+  sourceName: string;
   limit?: number;
 }): Promise<FetchRssResult> {
-  const { url, platform, limit = 50 } = args;
+  const { url, sourceName, limit = 50 } = args;
   const fetchedAt = new Date().toISOString();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
     const res = await fetch(url, {
       headers: {
-        "User-Agent": "Pathrix-RSS/1.0",
+        "User-Agent": "Scout-RSS/1.0",
         Accept: "application/rss+xml, application/atom+xml, application/xml, text/xml, */*",
       },
       signal: controller.signal,
     });
     if (!res.ok) {
-      return { url, platform, itemCountRaw: 0, items: [], fetchedAt, error: `http_${res.status}` };
+      return { url, sourceName, itemCountRaw: 0, items: [], fetchedAt, error: `http_${res.status}` };
     }
     const xml = await res.text();
     const chunks = splitItems(xml);
     const items = chunks
-      .map((c) => parseItem(c, platform))
-      .filter((x): x is RssItem => x !== null)
+      .map((c) => parseItem(c, sourceName))
+      .filter((x): x is FeedItem => x !== null)
       .slice(0, limit);
-    return { url, platform, itemCountRaw: chunks.length, items, fetchedAt };
+    return { url, sourceName, itemCountRaw: chunks.length, items, fetchedAt };
   } catch (err) {
     const msg = err instanceof Error ? err.message : "unknown error";
-    return { url, platform, itemCountRaw: 0, items: [], fetchedAt, error: msg };
+    return { url, sourceName, itemCountRaw: 0, items: [], fetchedAt, error: msg };
   } finally {
     clearTimeout(timeout);
   }

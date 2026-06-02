@@ -3,7 +3,46 @@ import { urlToId, isThreadResolved, getThreadCloseState, reopenThread } from "..
 import type { RawItem, ProfileSnapshot, OpenThread, CommentSample } from "../schema";
 import { scoreItem } from "../intelligence/score";
 
+interface RedditReplies {
+  data?: { children?: RedditNode[] };
+}
+
+interface RedditProfileScrapeOptions {
+  respectResolvedThreads?: boolean;
+}
+
+interface RedditNode {
+  kind: string;
+  data: {
+    id?: string;
+    author?: string;
+    body?: string;
+    created_utc?: number;
+    permalink?: string;
+    subreddit?: string;
+    title?: string;
+    url?: string;
+    selftext?: string;
+    score?: number;
+    num_comments?: number;
+    link_id?: string;
+    link_title?: string;
+    link_permalink?: string;
+    replies?: RedditReplies | string;
+    children?: RedditNode[];
+    [key: string]: unknown;
+  };
+}
+
 const BASE = "https://old.reddit.com";
+export type RedditSortKind = "hot" | "new" | "top:day" | "rising";
+export interface RedditRules {
+  accountAgeMinDays: number | null;
+  minKarma: number | null;
+  noJobPostings: boolean;
+  selfPromoAllowed: boolean;
+  raw: string[];
+}
 
 async function redditFetch(url: string) {
   const controller = new AbortController();
@@ -25,8 +64,20 @@ async function redditFetch(url: string) {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Reddit API child object shape is external; no published TypeScript types
 function mapPost(child: any): RawItem | null {
   const d = child?.data;
-  if (!d || !d.url) return null;
-  const url = d.url.startsWith("http") ? d.url : `https://reddit.com${d.url}`;
+  if (!d) return null;
+  const permalink =
+    typeof d.permalink === "string"
+      ? d.permalink.startsWith("http")
+        ? d.permalink
+        : `https://www.reddit.com${d.permalink}`
+      : "";
+  const outboundUrl = typeof d.url === "string"
+    ? d.url.startsWith("http")
+      ? d.url
+      : `https://reddit.com${d.url}`
+    : "";
+  const url = permalink || outboundUrl;
+  if (!url) return null;
   const id = urlToId(url);
   const raw: RawItem = {
     id,
@@ -73,13 +124,75 @@ export async function getHotPosts(subreddit: string, limit = 10): Promise<RawIte
   return children.map(mapPost).filter(Boolean) as RawItem[];
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Reddit API comment objects are external; shape unknown at compile time
-function findCommentInTree(children: any[], targetId: string): any | null {
+export async function getSubredditPosts(
+  subreddit: string,
+  sort: RedditSortKind = "hot",
+  limit = 10
+): Promise<RawItem[]> {
+  const path = sort === "top:day" ? "top.json?t=day" : `${sort}.json`;
+  const url = `${BASE}/r/${subreddit}/${path}${path.includes("?") ? "&" : "?"}limit=${limit}`;
+  const json = await redditFetch(url);
+  const children = json?.data?.children ?? [];
+  return children.map(mapPost).filter(Boolean) as RawItem[];
+}
+
+function parseSubredditRules(rulesData: unknown): RedditRules {
+  const result: RedditRules = {
+    accountAgeMinDays: null,
+    minKarma: null,
+    noJobPostings: false,
+    selfPromoAllowed: true,
+    raw: [],
+  };
+
+  const rules = (rulesData as { rules?: { short_name?: string; description?: string }[] } | null)?.rules ?? [];
+  for (const rule of rules) {
+    const text = `${rule.short_name ?? ""} ${rule.description ?? ""}`.toLowerCase();
+    result.raw.push((rule.short_name ?? "").slice(0, 200));
+
+    const ageMatch = text.match(/account.*?(\d+)\s*(day|month|year)/i) ?? text.match(/(\d+)\s*(day|month|year).*?account/i);
+    if (ageMatch) {
+      const val = Number.parseInt(ageMatch[1], 10);
+      const unit = ageMatch[2].toLowerCase();
+      const days = unit.startsWith("month") ? val * 30 : unit.startsWith("year") ? val * 365 : val;
+      if (!result.accountAgeMinDays || days > result.accountAgeMinDays) {
+        result.accountAgeMinDays = days;
+      }
+    }
+
+    const karmaMatch = text.match(/(\d+)\s*(karma|post karma|comment karma)/i);
+    if (karmaMatch) {
+      const val = Number.parseInt(karmaMatch[1], 10);
+      if (!result.minKarma || val > result.minKarma) {
+        result.minKarma = val;
+      }
+    }
+
+    if (/no job|no hiring|no recruit|no spam|no self.?promo/i.test(text)) {
+      result.noJobPostings = true;
+    }
+
+    if (/self.?promo.*(allow|ok|permitted)/i.test(text)) {
+      result.selfPromoAllowed = true;
+    } else if (/no self.?promo/i.test(text)) {
+      result.selfPromoAllowed = false;
+    }
+  }
+
+  return result;
+}
+
+export async function getSubredditRules(subreddit: string): Promise<RedditRules> {
+  const json = await redditFetch(`https://www.reddit.com/r/${subreddit}/about/rules.json`);
+  return parseSubredditRules(json);
+}
+
+function findCommentInTree(children: RedditNode[], targetId: string): RedditNode | null {
   for (const child of children) {
     if (child?.kind !== "t1" || !child.data) continue;
     if (child.data.id === targetId) return child;
     const replies = child.data.replies;
-    if (replies && typeof replies === "object") {
+    if (replies && typeof replies === "object" && "data" in replies) {
       const found = findCommentInTree(replies.data?.children ?? [], targetId);
       if (found) return found;
     }
@@ -87,8 +200,11 @@ function findCommentInTree(children: any[], targetId: string): any | null {
   return null;
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Reddit API comment objects are external; shape unknown at compile time
-async function fetchOpenThreads(handle: string, recentComments: any[]): Promise<OpenThread[]> {
+async function fetchOpenThreads(
+  handle: string,
+  recentComments: RedditNode[],
+  opts: RedditProfileScrapeOptions = {},
+): Promise<OpenThread[]> {
   // 90-day window - covers all realistic engagement timeframes
   const cutoff = Date.now() - 90 * 86_400_000;
   const candidates = recentComments.filter((c) => {
@@ -107,9 +223,10 @@ async function fetchOpenThreads(handle: string, recentComments: any[]): Promise<
 
     // Check resolution state. If resolved but a new reply arrived after close, reopen.
     const fullId = `t1_${commentId}`;
-    if (isThreadResolved("reddit", fullId)) {
+    if (opts.respectResolvedThreads === true && isThreadResolved("reddit", fullId)) {
       const closeState = getThreadCloseState("reddit", fullId);
-      const latestReplyAt = d.replies?.data?.children?.[0]?.data?.created_utc;
+      const repliesObj = typeof d.replies === "object" ? d.replies : undefined;
+      const latestReplyAt = repliesObj?.data?.children?.[0]?.data?.created_utc;
       const latestReplyTs = latestReplyAt ? new Date(latestReplyAt * 1000).toISOString() : null;
       const hasNewReply =
         latestReplyTs &&
@@ -127,10 +244,12 @@ async function fetchOpenThreads(handle: string, recentComments: any[]): Promise<
       // Walk the tree to find our specific comment - do NOT assume it's children[0].
       // When your comment is a reply to someone else, children[0] is the parent and
       // your comment is nested inside. Grabbing children[0].replies gives siblings, not replies to you.
-      const topLevel: any[] = data?.[1]?.data?.children ?? [];
+      const topLevel: RedditNode[] = (data?.[1]?.data?.children ?? []) as RedditNode[];
       const ourComment = findCommentInTree(topLevel, commentId);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Reddit thread JSON nests deeply; reply child shape is external API response
-      const replies: any[] = ourComment?.data?.replies?.data?.children ?? [];
+      const repliesRaw = ourComment?.data?.replies;
+      const replies: RedditNode[] = (
+        repliesRaw && typeof repliesRaw === "object" ? repliesRaw.data?.children ?? [] : []
+      ) as RedditNode[];
       const otherReplies = replies.filter(
         (r) => r?.data?.author && r.data.author !== handle && r.kind !== "more"
       );
@@ -232,7 +351,10 @@ export async function getComments(
   return flattenCommentTree(json);
 }
 
-export async function scrapeOwnProfile(handle: string): Promise<ProfileSnapshot> {
+export async function scrapeOwnProfile(
+  handle: string,
+  opts: RedditProfileScrapeOptions = {},
+): Promise<ProfileSnapshot> {
   const [about, submitted, comments] = await Promise.all([
     redditFetch(`${BASE}/user/${encodeURIComponent(handle)}/about.json`),
     redditFetch(`${BASE}/user/${encodeURIComponent(handle)}/submitted.json?limit=15&sort=new`),
@@ -292,7 +414,7 @@ export async function scrapeOwnProfile(handle: string): Promise<ProfileSnapshot>
     .filter(Boolean);
 
   const rawComments = comments?.data?.children ?? [];
-  const pendingThreads = await fetchOpenThreads(handle, rawComments);
+  const pendingThreads = await fetchOpenThreads(handle, rawComments, opts);
 
   return {
     platform: "reddit",

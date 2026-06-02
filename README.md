@@ -1,4 +1,4 @@
-# @pathrix/scout
+# @scout-scraper/core
 
 Community intelligence for your AI assistant. Scout scrapes Reddit, Hacker News, GitHub, YouTube, X, Instagram, Polymarket, and 16+ RSS feeds - ranks results across all of them, and exposes everything as MCP tools your AI can call directly.
 
@@ -28,7 +28,7 @@ Scout implements the open [Model Context Protocol](https://modelcontextprotocol.
 | Client | Config location |
 |--------|----------------|
 | Claude Desktop | `~/Library/Application Support/Claude/claude_desktop_config.json` |
-| Claude Code | `claude mcp add scout -- npx pathrix-scout` |
+| Claude Code | `claude mcp add scout -- npx scout-scraper` |
 | Cursor | `.cursor/mcp.json` in your project root |
 | Windsurf | `~/.codeium/windsurf/mcp_config.json` |
 | Cline, Continue, Zed | See your client's MCP documentation |
@@ -40,7 +40,7 @@ The config block is the same everywhere:
   "mcpServers": {
     "scout": {
       "command": "npx",
-      "args": ["pathrix-scout"]
+      "args": ["scout-scraper"]
     }
   }
 }
@@ -61,6 +61,20 @@ brew install gh && gh auth login
 ```
 
 That is it for the core setup. Reddit, Hacker News, Polymarket, and all 16 RSS feeds work with no auth at all.
+
+---
+
+## Runtime Modes
+
+Scout ships as one package with three supported entry points:
+
+| Mode | Command | Use case |
+|------|---------|----------|
+| NPM library | `import { ... } from "@scout-scraper/core"` | Call Scout from another Node.js application. |
+| Stdio MCP server | `npx scout-scraper` | Attach Scout directly to an MCP-compatible assistant. |
+| HTTP server | `scout-scraper serve --host 127.0.0.1 --port 8890` | Run Scout as a long-lived service under PM2, Docker, or another process manager. |
+
+The HTTP server exposes a stateless `/mcp` endpoint plus deterministic JSON endpoints for generic source operations such as Apify pricing, actor runs, run recovery, and run listing. Set `SCOUT_AUTH_TOKEN` to require bearer auth for `/mcp` and `/v1/*` routes.
 
 ---
 
@@ -240,7 +254,7 @@ All variables are optional. The core setup needs none.
 | `SCOUT_IG_USERNAME` | Instagram login (burner account) |
 | `SCOUT_IG_PASSWORD` | Instagram login (burner account) |
 | `SCOUT_WHISPER_MODEL` | Transcription quality: `tiny` / `base` / `small`. Default: `tiny` |
-| `SCOUT_TEMP_DIR` | Temp directory for video downloads. Default: `/tmp/pathrix-scout` |
+| `SCOUT_TEMP_DIR` | Temp directory for video downloads. Default: `/tmp/scout-scraper` |
 | `SCOUT_SEARXNG_URL` | SearXNG instance URL e.g. `http://localhost:8080`. Enables web search (self-hosted) |
 | `SCOUT_BRAVE_API_KEY` | Brave Search API key. Enables web search (managed). SearXNG takes priority if both set |
 | `SCOUT_VENV_PYTHON` | Path to Python executable if using a custom venv |
@@ -252,7 +266,7 @@ All variables are optional. The core setup needs none.
 Scout stores everything locally:
 
 ```
-~/.local/share/pathrix-scout/scout.db
+~/.local/share/scout-scraper/scout.db
 ```
 
 - SQLite with WAL mode (safe for concurrent access)
@@ -305,4 +319,4 @@ Open an issue before starting a large feature so we can align first.
 
 ## License
 
-MIT - [@pathrix/scout](https://github.com/pathrix-os/scout)
+MIT - [@scout-scraper/core](https://github.com/scout-scraper/core)

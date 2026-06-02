@@ -12,7 +12,7 @@ let _db: ReturnType<typeof openDb> | null = null;
 function openDb() {
   const Database = _require("better-sqlite3");
 
-  const dir = path.join(os.homedir(), ".local", "share", "pathrix-scout");
+  const dir = path.join(os.homedir(), ".local", "share", "scout-scraper");
   fs.mkdirSync(dir, { recursive: true });
   const dbPath = path.join(dir, "scout.db");
 

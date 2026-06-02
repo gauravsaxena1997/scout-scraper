@@ -17,7 +17,7 @@ export const ScoutConfigSchema = z.object({
 
 export type ScoutConfig = z.infer<typeof ScoutConfigSchema>;
 
-export const SCOUT_UA = "pathrix-scout/1.0";
+export const SCOUT_UA = "scout-scraper/1.0";
 
 // ─── Own profile handles ───────────────────────────────────────────────────────
 

@@ -4,7 +4,8 @@ import os from "os";
 import https from "https";
 import http from "http";
 
-// Single canonical media root for sweeps. Override via PATHRIX_MEDIA_DIR.
+// Single canonical media root for downloaded transcripts and media.
+// Override via SCOUT_MEDIA_DIR.
 // Layout under this root:
 //   transcripts/<source>/<channel>/<itemId>.txt
 //   images/<source>/<channel>/<itemId>/slide-<n>.<ext>
@@ -12,8 +13,9 @@ import http from "http";
 //   raw/<source>/<channel>/<itemId>.json
 //   vision/<source>/<channel>/<itemId>/slide-<n>.txt
 export function getMediaRoot(): string {
+  if (process.env.SCOUT_MEDIA_DIR) return process.env.SCOUT_MEDIA_DIR;
   if (process.env.PATHRIX_MEDIA_DIR) return process.env.PATHRIX_MEDIA_DIR;
-  return path.join(os.homedir(), ".local", "share", "pathrix-scout", "media");
+  return path.join(os.homedir(), ".local", "share", "scout-scraper", "media");
 }
 
 type Source = "youtube" | "instagram" | "x" | "reddit" | string;
@@ -175,7 +177,7 @@ export async function cleanupOldMedia(daysToKeep: number): Promise<{ deletedFile
   let deletedFiles = 0;
   let freedBytes = 0;
 
-  async function sweep(dir: string): Promise<void> {
+  async function walk(dir: string): Promise<void> {
     let entries: fs.Dirent[];
     try {
       entries = await fs.promises.readdir(dir, { withFileTypes: true });
@@ -185,7 +187,7 @@ export async function cleanupOldMedia(daysToKeep: number): Promise<{ deletedFile
     for (const e of entries) {
       const full = path.join(dir, e.name);
       if (e.isDirectory()) {
-        await sweep(full);
+        await walk(full);
       } else if (e.isFile()) {
         try {
           const st = await fs.promises.stat(full);
@@ -201,7 +203,7 @@ export async function cleanupOldMedia(daysToKeep: number): Promise<{ deletedFile
 
   try {
     await fs.promises.access(root);
-    await sweep(root);
+    await walk(root);
   } catch {
     // root doesn't exist yet
   }

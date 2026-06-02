@@ -433,16 +433,57 @@ export type InstagramPost = {
   comments: number;
 };
 
-export async function getInstagramChannelPosts(
+export type InstagramChannelPostsResult = {
+  posts: InstagramPost[];
+  actualCostUsd: number;
+  apifyRunIds: string[];
+};
+
+type InstagramActorItem = {
+  url?: unknown;
+  shortCode?: unknown;
+  timestamp?: unknown;
+  takenAt?: unknown;
+  publishedAt?: unknown;
+  type?: unknown;
+  mediaType?: unknown;
+  childPosts?: unknown;
+  images?: unknown;
+  displayUrl?: unknown;
+  id?: unknown;
+  videoUrl?: unknown;
+  caption?: unknown;
+  text?: unknown;
+  ownerUsername?: unknown;
+  username?: unknown;
+  author?: unknown;
+  likesCount?: unknown;
+  likes?: unknown;
+  commentsCount?: unknown;
+  comments?: unknown;
+};
+
+function asInstagramActorItem(value: unknown): InstagramActorItem {
+  return value && typeof value === "object" ? value as InstagramActorItem : {};
+}
+
+function childDisplayUrl(value: unknown): string | null {
+  if (!value || typeof value !== "object") return null;
+  const maybeUrl = (value as { displayUrl?: unknown }).displayUrl;
+  return typeof maybeUrl === "string" ? maybeUrl : null;
+}
+
+export async function getInstagramChannelPostsDetailed(
   handle: string,
   limit: number,
-  since?: Date
-): Promise<InstagramPost[]> {
+  since?: Date,
+  actorIdOverride?: string | null,
+): Promise<InstagramChannelPostsResult> {
   if (!apifyPool.configured) throw new Error("APIFY_TOKENS not set");
 
   const token = apifyPool.next();
   const client = new ApifyClient({ token });
-  const actorId = APIFY_ACTOR_REGISTRY["instagram-posts"];
+  const actorId = actorIdOverride ?? APIFY_ACTOR_REGISTRY["instagram-posts"];
 
   const cleanHandle = handle.replace(/^@/, "");
   const run = await client.actor(actorId).call(
@@ -452,44 +493,43 @@ export async function getInstagramChannelPosts(
     },
     { timeout: 120 }
   );
+  const settledRun = await client.run(run.id).get().catch(() => null);
 
   const { items } = await client.dataset(run.defaultDatasetId).listItems({ limit: limit * 3 });
 
   const posts: InstagramPost[] = [];
   for (const item of items) {
+    const raw = asInstagramActorItem(item);
     const url = safeUrl(
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Apify output is untyped
-      (item as any)?.url ?? ((item as any)?.shortCode && `https://www.instagram.com/p/${(item as any).shortCode}/`)
+      raw.url ?? (typeof raw.shortCode === "string" && `https://www.instagram.com/p/${raw.shortCode}/`)
     );
     if (!url) continue;
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Apify output is untyped
-    const raw = item as any;
-    const publishedAt = safeDate(raw?.timestamp ?? raw?.takenAt ?? raw?.publishedAt);
+    const publishedAt = safeDate(raw.timestamp ?? raw.takenAt ?? raw.publishedAt);
 
     if (since && new Date(publishedAt) < since) continue;
 
-    const rawType = safeStr(raw?.type ?? raw?.mediaType, "Image");
+    const rawType = safeStr(raw.type ?? raw.mediaType, "Image");
     const mediaType: InstagramPost["mediaType"] =
       rawType === "Video" || rawType === "Sidecar" ? rawType : "Image";
 
     // Apify shape varies. Carousel slides come in `images: string[]` or `childPosts: [{ displayUrl }]`.
     // Single Image/Video posts use `displayUrl`. Capture all so analyze_image can run on every slide.
-    const childUrls: string[] = Array.isArray(raw?.childPosts)
-      ? (raw.childPosts as Array<{ displayUrl?: unknown }>)
-          .map((c) => c?.displayUrl)
-          .filter((u): u is string => typeof u === "string")
+    const childUrls: string[] = Array.isArray(raw.childPosts)
+      ? raw.childPosts
+          .map(childDisplayUrl)
+          .filter((u): u is string => u !== null)
       : [];
-    const imagesArr: string[] = Array.isArray(raw?.images)
+    const imagesArr: string[] = Array.isArray(raw.images)
       ? (raw.images as unknown[]).filter((u): u is string => typeof u === "string")
       : [];
-    const displayUrl: string | undefined = typeof raw?.displayUrl === "string" ? raw.displayUrl : undefined;
+    const displayUrl: string | undefined = typeof raw.displayUrl === "string" ? raw.displayUrl : undefined;
     const imageUrls = Array.from(
       new Set([...(displayUrl ? [displayUrl] : []), ...imagesArr, ...childUrls])
     );
 
-    const postId = safeStr(raw?.id ?? raw?.shortCode, urlToId(url));
-    const videoUrl = typeof raw?.videoUrl === "string" ? raw.videoUrl : undefined;
+    const postId = safeStr(raw.id ?? raw.shortCode, urlToId(url));
+    const videoUrl = typeof raw.videoUrl === "string" ? raw.videoUrl : undefined;
 
     // Persist raw Apify item + media to local store BEFORE the URLs expire.
     // Idempotent and cheap if files already exist.
@@ -498,7 +538,7 @@ export async function getInstagramChannelPosts(
     let videoPathLocal: string | null = null;
     try {
       rawScrapePath = await saveRawScrape("instagram", cleanHandle, postId, raw);
-    } catch { /* keep going - raw save failure shouldn't block sweep */ }
+    } catch { /* keep going - raw save failure should not block collection */ }
     if (imageUrls.length > 0) {
       try {
         imagePaths = await downloadImageSlides("instagram", cleanHandle, postId, imageUrls);
@@ -515,7 +555,7 @@ export async function getInstagramChannelPosts(
     posts.push({
       postId,
       url,
-      caption: safeStr(raw?.caption ?? raw?.text, ""),
+      caption: safeStr(raw.caption ?? raw.text, ""),
       mediaType,
       videoUrl,
       imageUrls,
@@ -523,16 +563,29 @@ export async function getInstagramChannelPosts(
       imagePaths,
       videoPath: videoPathLocal,
       rawScrapePath,
-      author: safeStr(raw?.ownerUsername ?? raw?.username ?? raw?.author, handle),
+      author: safeStr(raw.ownerUsername ?? raw.username ?? raw.author, handle),
       publishedAt,
-      likes: safeNum(raw?.likesCount ?? raw?.likes, 0),
-      comments: safeNum(raw?.commentsCount ?? raw?.comments, 0),
+      likes: safeNum(raw.likesCount ?? raw.likes, 0),
+      comments: safeNum(raw.commentsCount ?? raw.comments, 0),
     });
 
     if (posts.length >= limit) break;
   }
 
-  return posts;
+  return {
+    posts,
+    actualCostUsd: settledRun?.usageTotalUsd ?? run.usageTotalUsd ?? 0,
+    apifyRunIds: [run.id],
+  };
+}
+
+export async function getInstagramChannelPosts(
+  handle: string,
+  limit: number,
+  since?: Date
+): Promise<InstagramPost[]> {
+  const result = await getInstagramChannelPostsDetailed(handle, limit, since);
+  return result.posts;
 }
 
 // ─── Main Scraper Function ────────────────────────────────────────────────────

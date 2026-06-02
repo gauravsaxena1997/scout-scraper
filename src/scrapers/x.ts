@@ -3,9 +3,8 @@ import path from "path";
 import { urlToId } from "../store/db";
 import type { RawItem, ProfileSnapshot } from "../schema";
 
-// Use process.cwd() (always the Pathrix project root) so the path survives
-// Next.js bundling — import.meta.url gets rewritten to the chunk URL by webpack,
-// making __dirname point into .next/server/chunks/ where vendor files don't exist.
+// Use process.cwd() so host applications can resolve the vendored script from
+// their runtime root even when bundlers rewrite import.meta.url.
 const BIRD_MJS = path.join(
   process.cwd(),
   "packages/scout/src/vendor/bird-search/bird-search.mjs",

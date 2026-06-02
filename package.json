@@ -1,13 +1,13 @@
 {
-  "name": "@pathrix/scout",
+  "name": "@scout-scraper/core",
   "version": "1.0.0",
-  "description": "Zero-cost, self-hosted intelligence layer for Claude. Scrapes Reddit, HN, GitHub, and 16+ RSS feeds, fuses results with RRF ranking, and exposes everything as MCP tools.",
+  "description": "Open-source scraping and research runtime with HTTP, MCP, and Node library interfaces.",
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
-    "pathrix-scout": "./dist/bin/cli.js"
+    "scout-scraper": "./dist/bin/cli.js"
   },
   "exports": {
     ".": {
@@ -18,8 +18,17 @@
   },
   "scripts": {
     "build": "tsup",
-    "dev": "tsup --watch"
+    "dev": "tsup --watch",
+    "serve": "node ./dist/bin/cli.js serve"
   },
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "package.json"
+  ],
   "peerDependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
     "better-sqlite3": "^9.0.0",
@@ -42,6 +51,6 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/GauravSaxenaHQ/pathrix-scout-mcp"
+    "url": "https://github.com/scout-scraper/core"
   }
 }

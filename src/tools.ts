@@ -193,7 +193,7 @@ async function runScrapePlatform(
           publishedAt: p.publishedAt ?? new Date().toISOString(),
           scoutScore: 0,
           engagement: { score: p.likes ?? 0, comments: p.comments ?? 0, ratio: undefined, topComment: undefined, probability: undefined },
-          // Carry image URLs + media type forward so the sweep skill can call analyze_image per slide.
+          // Carry image URLs and media type forward for optional image analysis.
           mediaType: p.mediaType,
           imageUrls: p.imageUrls,
           videoUrl: p.videoUrl,
@@ -549,7 +549,7 @@ export function registerScoutTools(mcpServer: McpServer, config?: { onEvent?: On
         return { content: [{ type: "text", text: "No Reddit handle configured. Call configureHandles({ reddit: 'yourhandle' }) first." }] };
       }
       const { scrapeOwnProfile } = await import("./scrapers/reddit");
-      const snapshot = await scrapeOwnProfile(handle);
+      const snapshot = await scrapeOwnProfile(handle, { respectResolvedThreads: true });
       saveProfileSnapshot(snapshot);
 
       const threads = snapshot.pendingThreads ?? [];
@@ -676,7 +676,7 @@ export function registerScoutTools(mcpServer: McpServer, config?: { onEvent?: On
 
   mcpServer.tool(
     "get_reddit_comments",
-    "Scout: Fetch and flatten the comment tree for a Reddit post. Returns up to `limit` comments sorted by top, flattened from nested replies up to `depth` levels. Used by the Recon hydrator and the /run-recon-sweep slash command.",
+    "Scout: Fetch and flatten the comment tree for a Reddit post. Returns up to `limit` comments sorted by top, flattened from nested replies up to `depth` levels.",
     {
       post_url: z.string().url().describe("Full Reddit post URL (www or old.reddit.com)"),
       limit: z.number().optional().default(20).describe("Max comments to fetch from Reddit API"),
