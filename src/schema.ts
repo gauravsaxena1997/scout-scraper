@@ -61,10 +61,15 @@ export interface ProfilePost {
   likes: number;
   comments: number;
   shares?: number;
+  reposts?: number;
   views?: number;
   isViral: boolean;
   // Rich media
   imageUrl?: string;
+  mediaUrl?: string;
+  thumbnailUrl?: string;
+  mediaType?: string;
+  mediaProductType?: string;
   // Reddit-specific
   subreddit?: string;
   isComment?: boolean;
