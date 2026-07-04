@@ -46,6 +46,7 @@ export interface RawItem {
   publishedAt: string;
   /** Per-source normalized score (0-1) */
   scoutScore: number;
+  metadata?: Record<string, string | number | boolean | null>;
 }
 
 export interface SourceItem extends RawItem {

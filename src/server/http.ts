@@ -7,8 +7,9 @@ import { getActorPricing } from "../apify/pricing";
 import { listApifyRuns, recoverApifyRun, runApifyActor } from "../apify/runs";
 import { fetchAllFeeds, fetchSingleFeed, fetchYouTubeChannelFeed } from "../scrapers/rss";
 import { getHnByDate } from "../scrapers/hn";
-import { getTrendingRepos } from "../scrapers/github";
+import { getGithubBlogPosts, getGithubReleases, getTrendingRepos, searchGithubRepos } from "../scrapers/github";
 import { getTrendingPolymarket } from "../scrapers/polymarket";
+import { searchWeb } from "../scrapers/web";
 import { getComments, getSubredditPosts, getSubredditRules, scrapeOwnProfile, searchSubreddit, type RedditSortKind } from "../scrapers/reddit";
 import { resolveThread } from "../store/db";
 import { getYoutubeChannelVideos } from "../scrapers/youtube";
@@ -77,6 +78,15 @@ function asNumber(value: unknown): number | undefined {
 
 function asStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+function asTrendingSince(value: unknown): "daily" | "weekly" | "monthly" {
+  if (value === "daily" || value === "weekly" || value === "monthly") return value;
+  return "daily";
+}
+
+function asGithubBlogSection(value: unknown): "blog" | "changelog" {
+  return value === "changelog" ? "changelog" : "blog";
 }
 
 function asRedditSort(value: unknown): RedditSortKind {
@@ -217,8 +227,64 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, pathname: st
 
   if (pathname === "/v1/github/trending") {
     writeJson(res, 200, {
-      items: await getTrendingRepos(asString(body.language) || undefined, asNumber(body.limit) ?? 10),
+      items: await getTrendingRepos({
+        language: asString(body.language) || undefined,
+        limit: asNumber(body.limit) ?? 10,
+        since: asTrendingSince(body.since),
+      }),
     });
+    return;
+  }
+
+  if (pathname === "/v1/github/search-repos") {
+    const query = asString(body.query);
+    if (!query) {
+      writeJson(res, 400, { error: "query is required" });
+      return;
+    }
+    writeJson(res, 200, {
+      items: await searchGithubRepos({
+        query,
+        limit: asNumber(body.limit) ?? 10,
+        pushedAfter: asString(body.pushedAfter) || undefined,
+        sort: body.sort === "stars" ? "stars" : "updated",
+      }),
+    });
+    return;
+  }
+
+  if (pathname === "/v1/github/releases") {
+    const repositories = asStringArray(body.repositories);
+    if (repositories.length === 0) {
+      writeJson(res, 400, { error: "repositories is required" });
+      return;
+    }
+    writeJson(res, 200, {
+      items: await getGithubReleases({
+        repositories,
+        limit: asNumber(body.limit) ?? 10,
+      }),
+    });
+    return;
+  }
+
+  if (pathname === "/v1/github/blog") {
+    writeJson(res, 200, {
+      items: await getGithubBlogPosts({
+        section: asGithubBlogSection(body.section),
+        limit: asNumber(body.limit) ?? 10,
+      }),
+    });
+    return;
+  }
+
+  if (pathname === "/v1/web/search") {
+    const query = asString(body.query);
+    if (!query) {
+      writeJson(res, 400, { error: "query is required" });
+      return;
+    }
+    writeJson(res, 200, { items: await searchWeb(query, asNumber(body.limit) ?? 10) });
     return;
   }
 
@@ -452,7 +518,7 @@ export function startScoutServer(options: ScoutServerOptions = {}): http.Server 
   });
 
   server.listen(port, host, () => {
-    console.log(`[scout] listening on http://${host}:${port}`);
+    process.stdout.write(`[scout] listening on http://${host}:${port}\n`);
   });
 
   return server;
