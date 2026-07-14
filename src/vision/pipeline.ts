@@ -8,13 +8,14 @@ export interface VideoAnalysis {
   duration: number;
   language: string;
   transcript: string;
+  transcriptSource: "yt-dlp" | "faster-whisper";
   segments: Array<{ start: number; end: number; text: string }>;
   analyzedAt: string;
 }
 
-export async function analyzeVideo(url: string): Promise<VideoAnalysis> {
+export async function analyzeVideo(url: string, options?: { forceWhisper?: boolean }): Promise<VideoAnalysis> {
   // Fast path: auto-generated subtitles (no audio download, no Whisper, ~20s)
-  const subtitles = await downloadSubtitleResult(url).catch(() => null);
+  const subtitles = options?.forceWhisper ? null : await downloadSubtitleResult(url).catch(() => null);
   if (subtitles) {
     try {
       const parsed = parseVtt(subtitles.vttPath);
@@ -24,6 +25,7 @@ export async function analyzeVideo(url: string): Promise<VideoAnalysis> {
         duration: subtitles.duration,
         language: parsed.language,
         transcript: parsed.text,
+        transcriptSource: "yt-dlp",
         segments: parsed.segments,
         analyzedAt: new Date().toISOString(),
       };
@@ -42,6 +44,7 @@ export async function analyzeVideo(url: string): Promise<VideoAnalysis> {
       duration: download.duration,
       language: transcript.language,
       transcript: transcript.text,
+      transcriptSource: "faster-whisper",
       segments: transcript.segments,
       analyzedAt: new Date().toISOString(),
     };

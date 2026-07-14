@@ -318,7 +318,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, pathname: st
       writeJson(res, 400, { error: "url is required" });
       return;
     }
-    writeJson(res, 200, await analyzeVideo(url));
+    writeJson(res, 200, await analyzeVideo(url, { forceWhisper: body.forceWhisper === true }));
     return;
   }
 
